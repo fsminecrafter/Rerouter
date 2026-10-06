@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f5f2">
+  <title>Therock</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+      color: #192420;
+      background: #f4f5f2;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      --ink: #192420;
+      --muted: #78827c;
+      --line: #dce1dc;
+      --accent: #b5ef75;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    header {
+      height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcf9;
+    }
+
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .mark {
+      width: 27px;
+      height: 27px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #1d3210;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #70b84b;
+      content: "";
+    }
+
+    main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 228px minmax(0, 1fr);
+    }
+
+    nav {
+      padding: 27px 16px;
+      border-right: 1px solid var(--line);
+      background: #f8f9f6;
+    }
+
+    .nav-label {
+      margin: 0 12px 13px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    #pages { display: grid; gap: 4px; }
+
+    .page-link {
+      width: 100%;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #5d6862;
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .page-link:hover { background: #edf0eb; }
+    .page-link[aria-current="page"] {
+      background: #e8eee3;
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    .page-icon {
+      width: 17px;
+      height: 17px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #cdd5cc;
+      border-radius: 4px;
+      color: #7f8a82;
+      font-size: 10px;
+    }
+
+    .workspace {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      padding: 26px 28px 28px;
+    }
+
+    .toolbar {
+      min-height: 50px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 650;
+    }
+
+    #address {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .actions { display: flex; gap: 8px; }
+
+    .action {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcf9;
+      color: #526059;
+      cursor: pointer;
+    }
+
+    .action:hover { border-color: #aeb9af; color: var(--ink); }
+    .action svg { width: 16px; height: 16px; }
+
+    .frame-wrap {
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: white;
+    }
+
+    iframe { width: 100%; height: 100%; display: block; border: 0; }
+
+    .empty {
+      height: 100%;
+      display: grid;
+      place-content: center;
+      padding: 24px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 640px) {
+      header { height: 58px; padding: 0 16px; }
+      main { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+      nav { padding: 12px 12px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .nav-label { display: none; }
+      #pages { display: flex; overflow-x: auto; }
+      .page-link { width: auto; flex: 0 0 auto; }
+      .workspace { min-height: 55vh; padding: 17px 12px 12px; }
+      .toolbar { min-height: 55px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="mark" aria-hidden="true">T</span><span id="device">Therock</span></div>
+    <div class="status">Ready</div>
+  </header>
+  <main>
+    <nav aria-label="Webpages">
+      <p class="nav-label">Webpages</p>
+      <div id="pages"></div>
+    </nav>
+    <section class="workspace" aria-label="Website viewer">
+      <div class="toolbar">
+        <div>
+          <h1 id="title">Welcome to Therock</h1>
+          <p id="address"></p>
+        </div>
+        <div class="actions">
+          <button class="action" id="reload" type="button" aria-label="Reload webpage" title="Reload webpage">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M4.9 9a7.5 7.5 0 0 1 12.4-2.8L20 9M4 17v-5h5"/><path d="M19.1 15a7.5 7.5 0 0 1-12.4 2.8L4 15"/></svg>
+          </button>
+          <a class="action" id="open" aria-label="Open webpage in new tab" title="Open webpage in new tab" target="_blank" rel="noopener noreferrer" href="#">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>
+          </a>
+        </div>
+      </div>
+      <div class="frame-wrap" id="frame-wrap"><div class="empty">No webpages configured</div></div>
+    </section>
+  </main>
+  <script>
+    const pagesElement = document.querySelector("#pages");
+    const titleElement = document.querySelector("#title");
+    const addressElement = document.querySelector("#address");
+    const frameWrap = document.querySelector("#frame-wrap");
+    const openLink = document.querySelector("#open");
+    let currentFrame;
+
+    function resolvePage(value) {
+      if (/^:\d+\//.test(value)) return `${location.protocol}//${location.hostname}${value}`;
+      if (/^[\w.-]+:\d+\//.test(value)) return `${location.protocol}//${value}`;
+      return new URL(value, location.href).href;
+    }
+
+    function showPage(page, button) {
+      const address = resolvePage(page.webpage || page.url || page.href);
+      titleElement.textContent = page.title || address;
+      addressElement.textContent = address;
+      openLink.href = address;
+      pagesElement.querySelectorAll(".page-link").forEach((link) => link.removeAttribute("aria-current"));
+      button.setAttribute("aria-current", "page");
+      currentFrame = document.createElement("iframe");
+      currentFrame.title = page.title || "Embedded webpage";
+      currentFrame.src = address;
+      frameWrap.replaceChildren(currentFrame);
+    }
+
+    async function loadConfig() {
+      const response = await fetch("./config.json");
+      if (!response.ok) throw new Error(`Could not load config.json (${response.status})`);
+      const config = await response.json();
+      const pages = config.webapages || config.webpages || [];
+      document.querySelector("#device").textContent = config.device || "Device";
+      document.title = config.device ? `Welcome to ${config.device}` : "Website viewer";
+
+      if (!pages.length) {
+        titleElement.textContent = `Welcome to ${config.device || "your device"}`;
+        return;
+      }
+
+      pages.forEach((page, index) => {
+        const button = document.createElement("button");
+        button.className = "page-link";
+        button.type = "button";
+        button.innerHTML = '<span class="page-icon" aria-hidden="true">↗</span>';
+        const label = document.createElement("span");
+        label.textContent = page.title || page.webpage || page.url || `Webpage ${index + 1}`;
+        button.append(label);
+        button.addEventListener("click", () => showPage(page, button));
+        pagesElement.append(button);
+        if (index === 0) showPage(page, button);
+      });
+    }
+
+    document.querySelector("#reload").addEventListener("click", () => {
+      if (currentFrame) currentFrame.src = currentFrame.src;
+    });
+
+    loadConfig().catch((error) => {
+      titleElement.textContent = "Unable to load configuration";
+      addressElement.textContent = error.message;
+      frameWrap.innerHTML = '<div class="empty">Check that config.json is available and valid.</div>';
+    });
+  </script>
+</body>
+</html>

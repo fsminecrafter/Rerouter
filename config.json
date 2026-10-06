@@ -1,0 +1,9 @@
+{
+  "device": "Therock",
+  "webapages": [
+    {
+      "webpage": ":3000/wetty",
+      "title": "Wetty"
+    }
+  ]
+}
