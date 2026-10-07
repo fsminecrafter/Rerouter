@@ -1,5 +1,29 @@
 {
   "device": "Therock",
+  "boot_animation": true,
+  "refresh_seconds": 600,
+  "items_per_source": 15,
+  "max_items": 80,
+  "menus": [
+    { "type": "system", "title": "System" },
+    { "type": "feed", "title": "Dev RSS", "feed": "dev" },
+    { "type": "feed", "title": "News", "feed": "news" }
+  ],
+  "feeds": {
+    "dev": [
+      { "name": "Hacker News", "url": "https://hnrss.org/frontpage" },
+      { "name": "Lobsters", "url": "https://lobste.rs/rss" },
+      { "name": "GitHub Blog", "url": "https://github.blog/feed/" },
+      { "name": "Hackaday", "url": "https://hackaday.com/blog/feed/" },
+      { "name": "DEV", "url": "https://dev.to/feed" }
+    ],
+    "news": [
+      { "name": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml" },
+      { "name": "NPR", "url": "https://feeds.npr.org/1001/rss.xml" },
+      { "name": "The Guardian", "url": "https://www.theguardian.com/world/rss" },
+      { "name": "Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml" }
+    ]
+  },
   "webapages": [
     {
       "webpage": ":3000/wetty",

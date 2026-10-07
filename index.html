@@ -96,8 +96,6 @@
       text-transform: uppercase;
     }
 
-    #pages { display: grid; gap: 4px; }
-
     .page-link {
       width: 100%;
       min-height: 40px;
@@ -199,26 +197,77 @@
       text-align: center;
     }
 
+
+    #menus, #pages { display: grid; gap: 4px; }
+    .nav-label.second { margin-top: 22px; }
+
+    .panel { height: 100%; overflow: auto; padding: 20px 24px; }
+    .panel .note { color: var(--muted); font-size: 13px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+    .stat { padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcf9; }
+    .stat b { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .stat span { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+    .bar { height: 5px; margin-top: 9px; border-radius: 3px; background: #e6ebe4; overflow: hidden; }
+    .bar i { display: block; height: 100%; background: #70b84b; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .chip { padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; background: #fbfcf9;
+            color: #5d6862; font: inherit; font-size: 12px; cursor: pointer; }
+    .chip[aria-pressed="true"] { background: #e8eee3; border-color: #c4d0bc; color: var(--ink); font-weight: 650; }
+    .feed-item { padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .feed-item a { color: var(--ink); font-size: 14px; font-weight: 650; text-decoration: none; }
+    .feed-item a:hover { text-decoration: underline; }
+    .meta { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .summary { margin-top: 5px; color: #5d6862; font-size: 12px; line-height: 1.5; }
+    .feed-errors { margin-top: 14px; color: #a0623a; font-size: 12px; }
+
+    /* ---- terminal boot animation ---- */
+    #boot {
+      position: fixed; inset: 0; z-index: 100; padding: 26px; overflow: hidden; cursor: pointer;
+      background: #070b08; color: #b5ef75; transition: opacity .5s;
+      font: 13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      text-shadow: 0 0 6px rgba(181, 239, 117, .35);
+    }
+    #boot.done { opacity: 0; pointer-events: none; }
+    #boot::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.2) 3px);
+    }
+    #boot pre { margin: 0; font: inherit; white-space: pre-wrap; }
+    #boot .banner { font-size: 14px; line-height: 1.15; }
+    #boot .ok { color: #70e04b; }
+    #boot .warn { color: #e8c547; }
+    #boot .dim { color: #5f7a5a; }
+    #boot .hint { position: absolute; right: 20px; bottom: 16px; color: #4d6648; font-size: 11px; }
+    .cursor { display: inline-block; width: 8px; height: 1em; background: #b5ef75; vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
     @media (max-width: 640px) {
       header { height: 58px; padding: 0 16px; }
       main { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
       nav { padding: 12px 12px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
       .nav-label { display: none; }
-      #pages { display: flex; overflow-x: auto; }
-      .page-link { width: auto; flex: 0 0 auto; }
+      nav { display: flex; gap: 4px; overflow-x: auto; }
+      #menus, #pages { display: flex; gap: 4px; }
+      .page-link { width: auto; flex: 0 0 auto; white-space: nowrap; }
+      #boot { padding: 16px; font-size: 11px; }
+      #boot .banner { font-size: 10px; }
       .workspace { min-height: 55vh; padding: 17px 12px 12px; }
       .toolbar { min-height: 55px; }
     }
   </style>
 </head>
 <body>
+  <div id="boot" aria-hidden="true"><pre></pre><div class="hint">click or press any key to skip</div></div>
   <header>
     <div class="brand"><span class="mark" aria-hidden="true">T</span><span id="device">Therock</span></div>
     <div class="status">Ready</div>
   </header>
   <main>
     <nav aria-label="Webpages">
-      <p class="nav-label">Webpages</p>
+      <p class="nav-label" id="menus-label" hidden>Menus</p>
+      <div id="menus"></div>
+      <p class="nav-label second" id="pages-label" hidden>Webpages</p>
       <div id="pages"></div>
     </nav>
     <section class="workspace" aria-label="Website viewer">
@@ -240,66 +289,298 @@
     </section>
   </main>
   <script>
-    const pagesElement = document.querySelector("#pages");
-    const titleElement = document.querySelector("#title");
-    const addressElement = document.querySelector("#address");
-    const frameWrap = document.querySelector("#frame-wrap");
-    const openLink = document.querySelector("#open");
-    let currentFrame;
+    const $ = (sel) => document.querySelector(sel);
+    const menusElement = $("#menus");
+    const pagesElement = $("#pages");
+    const titleElement = $("#title");
+    const addressElement = $("#address");
+    const frameWrap = $("#frame-wrap");
+    const openLink = $("#open");
+    let reloadCurrent = null;
+    let viewToken = 0;
 
-    function resolvePage(value) {
-      if (/^:\d+\//.test(value)) return `${location.protocol}//${location.hostname}${value}`;
-      if (/^[\w.-]+:\d+\//.test(value)) return `${location.protocol}//${value}`;
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    /* ------------------------------------------------------------ boot */
+    const BANNER = String.raw` ____                      _            
+|  _ \ ___ _ __ ___  _   _| |_ ___ _ __ 
+| |_) / _ \ '__/ _ \| | | | __/ _ \ '__|
+|  _ <  __/ | | (_) | |_| | ||  __/ |   
+|_| \_\___|_|  \___/ \__,_|\__\___|_|   `;
+
+    async function runBoot(configPromise) {
+      const el = $("#boot");
+      const out = el.querySelector("pre");
+      const params = new URLSearchParams(location.search);
+      let seen = false;
+      try { seen = !!sessionStorage.getItem("rerouter-booted"); } catch (e) {}
+      const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const forced = params.get("boot") === "1";
+      if (params.get("boot") === "0" || (!forced && (seen || reduced))) return el.remove();
+
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        try { sessionStorage.setItem("rerouter-booted", "1"); } catch (e) {}
+        el.classList.add("done");
+        setTimeout(() => el.remove(), 600);
+        removeEventListener("keydown", finish);
+      };
+      el.addEventListener("click", finish);
+      addEventListener("keydown", finish);
+
+      const write = (html) => out.insertAdjacentHTML("beforeend", html + "\n");
+      const step = async (tag, text, cls = "ok", ms = 110) => {
+        if (finished) return;
+        write(`[ <span class="${cls}">${tag}</span> ] ${esc(text)}`);
+        await sleep(ms);
+      };
+
+      out.insertAdjacentHTML("beforeend", '<span class="banner"></span>');
+      const banner = out.querySelector(".banner");
+      for (const line of BANNER.split("\n")) {
+        if (finished) return;
+        banner.textContent += line + "\n";
+        await sleep(70);
+      }
+      write('<span class="dim">terminal boot sequence  //  web router</span>\n');
+      await sleep(200);
+
+      const config = await Promise.race([configPromise, sleep(1500).then(() => null)]);
+      if (config && config.boot_animation === false) return finish();
+
+      await step(config ? " OK " : "FAIL", "reading config.json", config ? "ok" : "warn");
+      if (config) await step(" OK ", `device name: ${config.device || "unnamed"}`);
+
+      let sys = null;
+      try {
+        const ctl = new AbortController();
+        setTimeout(() => ctl.abort(), 1500);
+        sys = await (await fetch("/api/system", { signal: ctl.signal })).json();
+      } catch (e) {}
+      if (sys) {
+        await step(" OK ", `host ${sys.hostname}  ${sys.ip ? "(" + sys.ip + ")" : ""}  ${sys.machine}`);
+        await step(" OK ", `kernel ${sys.platform}`);
+      } else {
+        await step("WARN", "system probe unavailable", "warn");
+      }
+      await step(" OK ", location.protocol === "https:" ? "secure channel: TLS" : "channel: HTTP (HTTPS served on same port)");
+      if (config) {
+        const feeds = Object.keys(config.feeds || {}).length;
+        const pages = (config.webapages || config.webpages || []).length;
+        await step(" OK ", `menus ${(config.menus || []).length}, feed groups ${feeds}, webpages ${pages}`);
+      }
+      await step(" OK ", "starting router");
+
+      if (finished) return;
+      write("");
+      out.insertAdjacentHTML("beforeend", '<span class="bar-line"></span>\n');
+      const bar = out.querySelector(".bar-line");
+      for (let i = 0; i <= 30 && !finished; i++) {
+        bar.textContent = `[${"#".repeat(i)}${".".repeat(30 - i)}] ${Math.round((i / 30) * 100)}%`;
+        await sleep(22);
+      }
+      if (finished) return;
+      write(`\n<span class="ok">Welcome to ${esc((config && config.device) || "Rerouter")}</span> <span class="cursor"></span>`);
+      await sleep(650);
+      finish();
+    }
+
+    /* ------------------------------------------------------- formatting */
+    function ago(epoch) {
+      if (!epoch) return "";
+      const s = Math.max(0, Date.now() / 1000 - epoch);
+      if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+      if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+      return `${Math.round(s / 86400)}d ago`;
+    }
+    function bytes(n) {
+      const u = ["B", "KB", "MB", "GB", "TB"];
+      let i = 0;
+      while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+      return `${n.toFixed(i > 1 ? 1 : 0)} ${u[i]}`;
+    }
+    function duration(s) {
+      const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+      return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+    }
+    const safeHref = (u) => (/^https?:\/\//i.test(u || "") ? u : "");
+
+    /* ------------------------------------------------------ built-in views */
+    function makePanel() {
+      const panel = document.createElement("div");
+      panel.className = "panel";
+      panel.innerHTML = '<p class="note">Loading…</p>';
+      frameWrap.replaceChildren(panel);
+      return panel;
+    }
+
+    async function renderSystem(panel, token) {
+      const res = await fetch("/api/system", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const s = await res.json();
+      if (token !== viewToken) return;
+      const cards = [];
+      const card = (label, value, pct) => cards.push(
+        `<div class="stat"><b>${esc(label)}</b><span>${esc(value)}</span>` +
+        (pct != null ? `<div class="bar"><i style="width:${Math.min(100, Math.max(0, pct))}%"></i></div>` : "") + "</div>");
+      card("Hostname", s.hostname);
+      if (s.ip) card("Address", s.ip);
+      card("Platform", `${s.platform} (${s.machine})`);
+      if (s.uptime != null) card("Uptime", duration(s.uptime));
+      if (s.load) card("Load (1/5/15)", s.load.map((n) => n.toFixed(2)).join("  "));
+      if (s.mem_total) {
+        const used = s.mem_total - s.mem_available;
+        card("Memory", `${bytes(used)} / ${bytes(s.mem_total)}`, (used / s.mem_total) * 100);
+      }
+      if (s.disk_total) card("Disk", `${bytes(s.disk_used)} / ${bytes(s.disk_total)}`, (s.disk_used / s.disk_total) * 100);
+      if (s.cpu_temp != null) card("CPU temp", `${s.cpu_temp.toFixed(1)} °C`);
+      card("Rerouter", `python ${s.python}, up ${duration(s.service_uptime)}`);
+      card("Transport", s.tls ? "HTTP + HTTPS" : "HTTP only");
+      panel.innerHTML = `<div class="stat-grid">${cards.join("")}</div>`;
+    }
+
+    async function renderFeed(panel, token, group, force) {
+      const res = await fetch(`/api/feeds/${encodeURIComponent(group)}${force ? "?force=1" : ""}`, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (token !== viewToken) return;
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      let active = "All";
+      const draw = () => {
+        const chips = ["All", ...data.sources].map((name) =>
+          `<button class="chip" type="button" data-source="${esc(name)}" aria-pressed="${name === active}">${esc(name)}</button>`).join("");
+        const items = data.items.filter((i) => active === "All" || i.source === active);
+        const list = items.map((i) => {
+          const href = safeHref(i.link);
+          const title = href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : `<b>${esc(i.title)}</b>`;
+          return `<div class="feed-item">${title}<div class="meta">${esc(i.source)}${i.published ? " · " + ago(i.published) : ""}</div>` +
+                 (i.summary ? `<div class="summary">${esc(i.summary)}</div>` : "") + "</div>";
+        }).join("");
+        const errors = data.errors.length
+          ? `<div class="feed-errors">Unavailable: ${data.errors.map((e) => esc(e.source)).join(", ")}</div>` : "";
+        panel.innerHTML = `<div class="chips">${chips}</div>${list || '<p class="note">No items.</p>'}${errors}`;
+      };
+      panel.addEventListener("click", (e) => {
+        const chip = e.target.closest(".chip");
+        if (!chip) return;
+        active = chip.dataset.source;
+        const top = panel.scrollTop;
+        draw();
+        panel.scrollTop = top;
+      });
+      draw();
+    }
+
+    function selectButton(button) {
+      document.querySelectorAll(".page-link").forEach((l) => l.removeAttribute("aria-current"));
+      button.setAttribute("aria-current", "page");
+    }
+
+    function showMenu(menu, button) {
+      selectButton(button);
+      titleElement.textContent = menu.title || menu.type;
+      addressElement.textContent = menu.type === "system" ? "Device status" : `Feed group: ${menu.feed}`;
+      openLink.style.display = "none";
+      const load = async (force) => {
+        const token = ++viewToken;
+        const panel = makePanel();
+        try {
+          if (menu.type === "system") await renderSystem(panel, token);
+          else if (menu.type === "feed") await renderFeed(panel, token, menu.feed, force);
+          else throw new Error(`unknown menu type "${menu.type}"`);
+        } catch (err) {
+          if (token === viewToken) panel.innerHTML = `<p class="note">Could not load: ${esc(err.message)}</p>`;
+        }
+      };
+      reloadCurrent = () => load(true);
+      load(false);
+    }
+
+    /* ------------------------------------------------------- webpages */
+    function resolvePage(page) {
+      const value = page.webpage || page.url || page.href;
+      const scheme = page.scheme ? `${page.scheme.replace(/:?$/, "")}:` : location.protocol;
+      if (/^:\d+\//.test(value)) return `${scheme}//${location.hostname}${value}`;
+      if (/^[\w.-]+:\d+\//.test(value)) return `${scheme}//${value}`;
       return new URL(value, location.href).href;
     }
 
     function showPage(page, button) {
-      const address = resolvePage(page.webpage || page.url || page.href);
+      ++viewToken;
+      selectButton(button);
+      const address = resolvePage(page);
       titleElement.textContent = page.title || address;
       addressElement.textContent = address;
       openLink.href = address;
-      pagesElement.querySelectorAll(".page-link").forEach((link) => link.removeAttribute("aria-current"));
-      button.setAttribute("aria-current", "page");
-      currentFrame = document.createElement("iframe");
-      currentFrame.title = page.title || "Embedded webpage";
-      currentFrame.src = address;
-      frameWrap.replaceChildren(currentFrame);
+      openLink.style.display = "";
+      const frame = document.createElement("iframe");
+      frame.title = page.title || "Embedded webpage";
+      frame.src = address;
+      frameWrap.replaceChildren(frame);
+      reloadCurrent = () => { frame.src = frame.src; };
+      if (location.protocol === "https:" && address.startsWith("http:")) {
+        addressElement.textContent += "  (http page inside https: the browser may block it - set \"scheme\" in config.json or use Open)";
+      }
     }
 
-    async function loadConfig() {
-      const response = await fetch("./config.json");
+    /* ------------------------------------------------------------ app */
+    async function fetchConfig() {
+      const response = await fetch("./config.json", { cache: "no-store" });
       if (!response.ok) throw new Error(`Could not load config.json (${response.status})`);
-      const config = await response.json();
+      return response.json();
+    }
+
+    function addButton(container, icon, label, onClick) {
+      const button = document.createElement("button");
+      button.className = "page-link";
+      button.type = "button";
+      button.innerHTML = `<span class="page-icon" aria-hidden="true">${icon}</span>`;
+      const text = document.createElement("span");
+      text.textContent = label;
+      button.append(text);
+      button.addEventListener("click", () => onClick(button));
+      container.append(button);
+      return button;
+    }
+
+    function render(config) {
       const pages = config.webapages || config.webpages || [];
-      document.querySelector("#device").textContent = config.device || "Device";
+      const menus = config.menus || [
+        { type: "system", title: "System" },
+        { type: "feed", title: "Dev RSS", feed: "dev" },
+        { type: "feed", title: "News", feed: "news" },
+      ];
+      $("#device").textContent = config.device || "Device";
       document.title = config.device ? `Welcome to ${config.device}` : "Website viewer";
 
-      if (!pages.length) {
-        titleElement.textContent = `Welcome to ${config.device || "your device"}`;
-        return;
-      }
-
-      pages.forEach((page, index) => {
-        const button = document.createElement("button");
-        button.className = "page-link";
-        button.type = "button";
-        button.innerHTML = '<span class="page-icon" aria-hidden="true">↗</span>';
-        const label = document.createElement("span");
-        label.textContent = page.title || page.webpage || page.url || `Webpage ${index + 1}`;
-        button.append(label);
-        button.addEventListener("click", () => showPage(page, button));
-        pagesElement.append(button);
-        if (index === 0) showPage(page, button);
+      const icons = { system: "▤", feed: "≡" };
+      const first = [];
+      menus.forEach((menu) => {
+        const b = addButton(menusElement, icons[menu.type] || "•", menu.title || menu.type, (btn) => showMenu(menu, btn));
+        first.push(() => showMenu(menu, b));
       });
+      pages.forEach((page, i) => {
+        const b = addButton(pagesElement, "↗", page.title || page.webpage || page.url || `Webpage ${i + 1}`, (btn) => showPage(page, btn));
+        first.push(() => showPage(page, b));
+      });
+      $("#menus-label").hidden = !menus.length;
+      $("#pages-label").hidden = !pages.length;
+
+      if (first.length) first[0]();
+      else titleElement.textContent = `Welcome to ${config.device || "your device"}`;
     }
 
-    document.querySelector("#reload").addEventListener("click", () => {
-      if (currentFrame) currentFrame.src = currentFrame.src;
-    });
+    $("#reload").addEventListener("click", () => { if (reloadCurrent) reloadCurrent(); });
 
-    loadConfig().catch((error) => {
+    const configPromise = fetchConfig().catch((error) => { configPromise.error = error; return null; });
+    runBoot(configPromise);
+    configPromise.then((config) => {
+      if (config) return render(config);
       titleElement.textContent = "Unable to load configuration";
-      addressElement.textContent = error.message;
+      addressElement.textContent = configPromise.error ? configPromise.error.message : "";
       frameWrap.innerHTML = '<div class="empty">Check that config.json is available and valid.</div>';
     });
   </script>

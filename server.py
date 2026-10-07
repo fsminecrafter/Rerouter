@@ -1,26 +1,380 @@
+#!/usr/bin/env python3
+"""Rerouter - a small website viewer with built-in menus.
+
+* Serves index.html + config.json (and nothing else from disk).
+* Speaks plain HTTP *and* HTTPS on the same port (default 2060): the first
+  byte of every connection is peeked, a TLS ClientHello (0x16) is wrapped,
+  anything else is handled as ordinary HTTP.
+* /api/system        -> device status
+* /api/feeds/<group> -> merged RSS/Atom feeds for a group from config.json
+
+Environment / flags: HOST, PORT, CERT, KEY, NO_TLS=1 (or --no-tls)
+"""
 import argparse
+import html
+import json
 import os
-from functools import partial
+import platform
+import re
+import shutil
+import socket
+import ssl
+import subprocess
+import threading
+import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
+STARTED = time.time()
+
+# Only these files are ever served from disk (certs/, .git, server.py, ... are not).
+STATIC = {"/": "index.html", "/index.html": "index.html", "/config.json": "config.json"}
+
+FEED_TTL_DEFAULT = 600          # seconds, override with "refresh_seconds" in config.json
+FEED_FORCE_MIN_AGE = 30         # a manual refresh can't hammer sources more often than this
+MAX_FEED_BYTES = 2 * 1024 * 1024
+USER_AGENT = "Rerouter/1.1 (+https://github.com/fsminecrafter/Rerouter)"
+
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+# --------------------------------------------------------------------------
+# config
+# --------------------------------------------------------------------------
+def load_config():
+    with open(ROOT / "config.json", encoding="utf-8") as f:
+        return json.load(f)
+
+
+# --------------------------------------------------------------------------
+# RSS / Atom
+# --------------------------------------------------------------------------
+def _local(tag):
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _safe_url(url):
+    parts = urllib.parse.urlsplit(url or "")
+    return url if parts.scheme in ("http", "https") and parts.netloc else ""
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    dt = None
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        try:
+            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _clean(text, limit=220):
+    text = re.sub(r"<[^>]+>", " ", html.unescape(text or ""))
+    text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def parse_feed(data, source):
+    root = ET.fromstring(data)
+    items = []
+    for el in root.iter():
+        if _local(el.tag) not in ("item", "entry"):
+            continue
+        f = {}
+        for child in el:
+            name = _local(child.tag)
+            if name == "link":
+                href = (child.text or "").strip() or child.get("href") or ""
+                if href and (not f.get("link") or child.get("rel") in (None, "alternate")):
+                    f["link"] = href
+            elif name in ("title", "description", "summary", "content",
+                          "pubDate", "published", "updated", "date"):
+                f.setdefault(name, "".join(child.itertext()).strip())
+        title = _clean(f.get("title"), 200)
+        if not title:
+            continue
+        stamp = next((f[k] for k in ("pubDate", "published", "updated", "date") if f.get(k)), None)
+        items.append({
+            "title": title,
+            "link": _safe_url(f.get("link")),
+            "source": source,
+            "published": _parse_date(stamp),
+            "summary": _clean(f.get("description") or f.get("summary") or f.get("content")),
+        })
+    return items
+
+
+def fetch_source(src):
+    url = _safe_url(src.get("url"))
+    if not url:
+        raise ValueError("missing or invalid url")
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+    })
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = resp.read(MAX_FEED_BYTES + 1)
+    if len(data) > MAX_FEED_BYTES:
+        raise ValueError("feed too large")
+    name = src.get("name") or urllib.parse.urlsplit(url).netloc
+    return parse_feed(data, name)
+
+
+def get_feed_group(group, force=False):
+    cfg = load_config()
+    sources = (cfg.get("feeds") or {}).get(group)
+    if not isinstance(sources, list):
+        return None
+    ttl = int(cfg.get("refresh_seconds", FEED_TTL_DEFAULT))
+    per_source = int(cfg.get("items_per_source", 15))
+    max_items = int(cfg.get("max_items", 80))
+    key = (group, json.dumps(sources, sort_keys=True))
+
+    with _cache_lock:
+        hit = _cache.get(key)
+    if hit and time.time() - hit["fetched"] < (FEED_FORCE_MIN_AGE if force else ttl):
+        return hit["data"]
+
+    items, errors = [], []
+    if sources:
+        with ThreadPoolExecutor(max_workers=min(8, len(sources))) as pool:
+            jobs = [(s, pool.submit(fetch_source, s)) for s in sources]
+            for src, job in jobs:
+                try:
+                    items.extend(job.result()[:per_source])
+                except Exception as exc:  # one bad feed must not break the group
+                    errors.append({"source": src.get("name") or src.get("url", "?"),
+                                   "error": str(exc)[:120]})
+    if not items and errors and hit:
+        return hit["data"]  # serve stale data rather than an empty list
+
+    items.sort(key=lambda i: i["published"] or 0, reverse=True)
+    data = {"group": group, "fetched": time.time(), "items": items[:max_items],
+            "sources": [s.get("name") or s.get("url") for s in sources], "errors": errors}
+    with _cache_lock:
+        _cache[key] = {"fetched": time.time(), "data": data}
+    return data
+
+
+# --------------------------------------------------------------------------
+# system info
+# --------------------------------------------------------------------------
+def local_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))  # no packet is actually sent
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def system_info():
+    info = {
+        "hostname": socket.gethostname(),
+        "platform": f"{platform.system()} {platform.release()}",
+        "machine": platform.machine(),
+        "python": platform.python_version(),
+        "ip": local_ip(),
+        "service_uptime": time.time() - STARTED,
+        "tls": TLS_ENABLED,
+    }
+    try:
+        with open("/proc/uptime") as f:
+            info["uptime"] = float(f.read().split()[0])
+    except (OSError, ValueError):
+        pass
+    try:
+        info["load"] = list(os.getloadavg())
+    except (OSError, AttributeError):
+        pass
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                mem[k] = int(v.split()[0]) * 1024
+        info["mem_total"] = mem["MemTotal"]
+        info["mem_available"] = mem.get("MemAvailable", mem.get("MemFree", 0))
+    except (OSError, ValueError, KeyError, IndexError):
+        pass
+    try:
+        du = shutil.disk_usage(ROOT)
+        info["disk_total"], info["disk_used"] = du.total, du.used
+    except OSError:
+        pass
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            info["cpu_temp"] = int(f.read().strip()) / 1000
+    except (OSError, ValueError):
+        pass
+    return info
+
+
+# --------------------------------------------------------------------------
+# HTTP handler
+# --------------------------------------------------------------------------
+class Handler(SimpleHTTPRequestHandler):
+    timeout = 30  # don't let idle/half-open connections pin a thread forever
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        super().end_headers()
+
+    def _send_json(self, payload, status=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _api(self, parsed):
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+        if path == "/api/system":
+            return self._send_json(system_info())
+        if path.startswith("/api/feeds/"):
+            group = urllib.parse.unquote(path[len("/api/feeds/"):])
+            try:
+                data = get_feed_group(group, force=query.get("force") == ["1"])
+            except (OSError, ValueError) as exc:
+                return self._send_json({"error": f"bad config.json: {exc}"}, 500)
+            if data is None:
+                return self._send_json({"error": f"unknown feed group '{group}'"}, 404)
+            return self._send_json(data)
+        return self._send_json({"error": "not found"}, 404)
+
+    def do_GET(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path.startswith("/api/"):
+            return self._api(parsed)
+        if parsed.path in STATIC:
+            self.path = "/" + STATIC[parsed.path]
+            return super().do_GET()
+        self.send_error(404, "Not found")
+
+    def do_HEAD(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path in STATIC:
+            self.path = "/" + STATIC[parsed.path]
+            return super().do_HEAD()
+        self.send_error(404, "Not found")
+
+
+# --------------------------------------------------------------------------
+# HTTP + HTTPS on one port
+# --------------------------------------------------------------------------
+class DualProtocolServer(ThreadingHTTPServer):
+    """Peeks at the first byte of each connection: 0x16 = TLS handshake."""
+
+    ssl_context = None
+
+    def finish_request(self, request, client_address):
+        # Runs in the per-connection worker thread, so a slow client can't block accept().
+        conn = request
+        try:
+            if self.ssl_context is not None:
+                request.settimeout(10)
+                first = request.recv(1, socket.MSG_PEEK)
+                if not first:
+                    return
+                if first[0] == 0x16:
+                    conn = self.ssl_context.wrap_socket(request, server_side=True)
+            conn.settimeout(Handler.timeout)
+            self.RequestHandlerClass(conn, client_address, self)
+        except (ssl.SSLError, ConnectionError, socket.timeout, TimeoutError):
+            pass  # browsers rejecting a self-signed cert, resets, idle clients...
+        finally:
+            if conn is not request:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+
+def ensure_cert(cert, key):
+    """Use existing cert/key, or generate a self-signed pair with openssl."""
+    if cert.exists() and key.exists():
+        return True
+    if not shutil.which("openssl"):
+        return False
+    cert.parent.mkdir(parents=True, exist_ok=True)
+    host = socket.gethostname()
+    san = f"subjectAltName=DNS:{host},DNS:localhost,IP:127.0.0.1"
+    ip = local_ip()
+    if ip:
+        san += f",IP:{ip}"
+    base = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
+            "-keyout", str(key), "-out", str(cert), "-subj", f"/CN={host}"]
+    try:
+        subprocess.run(base + ["-addext", san], check=True, capture_output=True)
+    except subprocess.CalledProcessError:  # very old openssl without -addext
+        subprocess.run(base, check=True, capture_output=True)
+    os.chmod(key, 0o600)
+    print(f"Generated self-signed certificate: {cert}")
+    return True
+
+
+TLS_ENABLED = False
 
 
 def main():
+    global TLS_ENABLED
     parser = argparse.ArgumentParser(description="Serve the Rerouter website viewer.")
     parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "2060")))
+    parser.add_argument("--cert", default=os.environ.get("CERT", str(ROOT / "certs" / "cert.pem")))
+    parser.add_argument("--key", default=os.environ.get("KEY", str(ROOT / "certs" / "key.pem")))
+    parser.add_argument("--no-tls", action="store_true",
+                        default=os.environ.get("NO_TLS", "") not in ("", "0"))
     args = parser.parse_args()
 
-    handler = partial(SimpleHTTPRequestHandler, directory=str(ROOT))
-    with ThreadingHTTPServer((args.host, args.port), handler) as server:
-        print(f"Serving Rerouter at http://{args.host}:{args.port}")
+    server = DualProtocolServer((args.host, args.port), Handler)
+
+    if not args.no_tls:
         try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
+            cert, key = Path(args.cert), Path(args.key)
+            if ensure_cert(cert, key):
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+                ctx.load_cert_chain(str(cert), str(key))
+                server.ssl_context = ctx
+                TLS_ENABLED = True
+            else:
+                print("WARNING: openssl not found and no certificate present - HTTPS disabled.")
+        except (OSError, ssl.SSLError, subprocess.CalledProcessError) as exc:
+            print(f"WARNING: HTTPS disabled ({exc})")
+
+    shown = args.host if args.host != "0.0.0.0" else "localhost"
+    print(f"Serving Rerouter at http://{shown}:{args.port}")
+    if TLS_ENABLED:
+        print(f"                and https://{shown}:{args.port}  (same port)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
