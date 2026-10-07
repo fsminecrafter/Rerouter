@@ -336,7 +336,7 @@
       <div id="editor-fields">
         <label>Title<input id="ed-title" type="text" maxlength="60" required></label>
         <label>Address<input id="ed-address" type="text" maxlength="300" placeholder=":3000/wetty" required></label>
-        <p class="help">Use <code>:3000/path</code> (this device), <code>host:3000/path</code> or a full <code>http(s)://</code> URL.</p>
+        <p class="help">Use <code>:3000/path</code> (this device, port 3000), <code>/path</code> (this device, default port), <code>host:3000/path</code> or a full <code>http(s)://</code> URL.</p>
         <label>Protocol
           <select id="ed-protocol">
             <option value="">Auto (same as this page)</option>
@@ -634,7 +634,10 @@
       const value = page.webpage || page.url || page.href;
       const chosen = page.protocol || page.scheme;   // "scheme" is the older name
       const scheme = chosen ? `${chosen.replace(/:?$/, "")}:` : location.protocol;
-      if (/^:\d+(\/|$)/.test(value)) return `${scheme}//${location.hostname}${value}`;
+      const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
+      // "/wetty" = this device on the default port (80/443), e.g. behind a reverse proxy - not :2060
+      if (/^\/(?!\/)/.test(value)) return `${scheme}//${host}${value}`;
+      if (/^:\d+(\/|$)/.test(value)) return `${scheme}//${host}${value}`;
       if (/^[\w.-]+:\d+(\/|$)/.test(value)) return `${scheme}//${value}`;
       return new URL(value, location.href).href;
     }

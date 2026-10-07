@@ -340,7 +340,7 @@ def system_info():
 # config editing + password (PBKDF2-HMAC-SHA256, stdlib only)
 # --------------------------------------------------------------------------
 PBKDF2_ITERATIONS = 200_000
-ADDRESS_RE = re.compile(r"^(https?://\S+|:\d{1,5}(/\S*)?|[\w.-]+:\d{1,5}(/\S*)?|/\S*)$")
+ADDRESS_RE = re.compile(r"^(https?://\S+|:\d{1,5}(/\S*)?|[\w.-]+:\d{1,5}(/\S*)?|/(?!/)\S*)$")
 MAX_BODY = 8192
 _config_lock = threading.Lock()
 _failures = {}   # client ip -> [count, first_failure, locked_until]
@@ -401,7 +401,7 @@ def validate_page(page):
     if not title or len(title) > 60:
         raise ApiError(400, "title is required (max 60 characters)")
     if not webpage or len(webpage) > 300 or not ADDRESS_RE.match(webpage):
-        raise ApiError(400, "address must look like :3000/path, host:3000/path, /path or http(s)://...")
+        raise ApiError(400, "address must look like :3000/path, /path, host:3000/path or http(s)://...")
     if protocol not in ("", "http", "https"):
         raise ApiError(400, "protocol must be empty (auto), http or https")
     entry = {"webpage": webpage, "title": title}
