@@ -236,6 +236,31 @@
     .retry { margin-top: 10px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px;
              background: #fbfcf9; font: inherit; font-size: 12px; cursor: pointer; }
 
+    [hidden] { display: none !important; }
+    .page-row { display: flex; align-items: center; gap: 2px; }
+    .page-row .page-link { flex: 1; min-width: 0; }
+    .row-btn { width: 26px; height: 26px; display: none; place-items: center; flex: 0 0 auto; border: 0; border-radius: 5px;
+               background: transparent; color: #7f8a82; font-size: 13px; cursor: pointer; }
+    .row-btn:hover { background: #edf0eb; color: var(--ink); }
+    .page-row:hover .row-btn, .page-row:focus-within .row-btn { display: grid; }
+    @media (hover: none) { .row-btn { display: grid; } }
+    .page-link.add { color: var(--muted); }
+
+    dialog#editor { width: min(420px, 92vw); padding: 22px; border: 1px solid var(--line); border-radius: 10px;
+                    background: #fbfcf9; color: var(--ink); font: inherit; }
+    dialog#editor::backdrop { background: rgba(25, 36, 32, .35); }
+    #editor h2 { margin: 0 0 14px; font-size: 16px; }
+    #editor label { display: block; margin: 0 0 12px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    #editor input, #editor select { display: block; width: 100%; margin-top: 5px; padding: 8px 10px; border: 1px solid var(--line);
+                    border-radius: 6px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 400; text-transform: none; }
+    #editor .help { margin: -6px 0 12px; color: var(--muted); font-size: 11px; }
+    #editor-error { min-height: 16px; margin: 4px 0 0; color: #b3432f; font-size: 12px; }
+    .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .btn { padding: 7px 14px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcf9; font: inherit; font-size: 13px; cursor: pointer; }
+    .btn.primary { border-color: #9fd563; background: var(--accent); color: #1d3210; font-weight: 650; }
+    .btn.danger { border-color: #d9a597; background: #f6d9d1; color: #7a2a1a; font-weight: 650; }
+    .btn:disabled { opacity: .6; cursor: wait; }
+
     /* ---- terminal boot animation ---- */
     #boot {
       position: fixed; inset: 0; z-index: 100; padding: 26px; overflow: hidden; cursor: pointer;
@@ -265,6 +290,8 @@
       nav { display: flex; gap: 4px; overflow-x: auto; }
       #menus, #pages { display: flex; gap: 4px; }
       .page-link { width: auto; flex: 0 0 auto; white-space: nowrap; }
+      .page-row { flex: 0 0 auto; }
+      .page-row .page-link { flex: 0 0 auto; }
       #boot { padding: 16px; font-size: 11px; }
       #boot .banner { font-size: 10px; }
       .workspace { min-height: 55vh; padding: 17px 12px 12px; }
@@ -303,6 +330,30 @@
       <div class="frame-wrap" id="frame-wrap"><div class="empty">No webpages configured</div></div>
     </section>
   </main>
+  <dialog id="editor">
+    <form id="editor-form" autocomplete="off">
+      <h2 id="editor-heading">Add webpage</h2>
+      <div id="editor-fields">
+        <label>Title<input id="ed-title" type="text" maxlength="60" required></label>
+        <label>Address<input id="ed-address" type="text" maxlength="300" placeholder=":3000/wetty" required></label>
+        <p class="help">Use <code>:3000/path</code> (this device), <code>host:3000/path</code> or a full <code>http(s)://</code> URL.</p>
+        <label>Protocol
+          <select id="ed-protocol">
+            <option value="">Auto (same as this page)</option>
+            <option value="http">http</option>
+            <option value="https">https</option>
+          </select>
+        </label>
+      </div>
+      <p id="editor-remove-text" hidden></p>
+      <label>Password<input id="ed-password" type="password" required></label>
+      <p id="editor-error" role="alert"></p>
+      <div class="dlg-actions">
+        <button class="btn" type="button" id="ed-cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="ed-submit">Save</button>
+      </div>
+    </form>
+  </dialog>
   <script>
     const $ = (sel) => document.querySelector(sel);
     const menusElement = $("#menus");
@@ -581,9 +632,10 @@
     /* ------------------------------------------------------- webpages */
     function resolvePage(page) {
       const value = page.webpage || page.url || page.href;
-      const scheme = page.scheme ? `${page.scheme.replace(/:?$/, "")}:` : location.protocol;
-      if (/^:\d+\//.test(value)) return `${scheme}//${location.hostname}${value}`;
-      if (/^[\w.-]+:\d+\//.test(value)) return `${scheme}//${value}`;
+      const chosen = page.protocol || page.scheme;   // "scheme" is the older name
+      const scheme = chosen ? `${chosen.replace(/:?$/, "")}:` : location.protocol;
+      if (/^:\d+(\/|$)/.test(value)) return `${scheme}//${location.hostname}${value}`;
+      if (/^[\w.-]+:\d+(\/|$)/.test(value)) return `${scheme}//${value}`;
       return new URL(value, location.href).href;
     }
 
@@ -601,7 +653,7 @@
       frameWrap.replaceChildren(frame);
       reloadCurrent = () => { frame.src = frame.src; };
       if (location.protocol === "https:" && address.startsWith("http:")) {
-        addressElement.textContent += "  (http page inside https: the browser may block it - set \"scheme\" in config.json or use Open)";
+        addressElement.textContent += "  (http page inside https: the browser may block it - set \"protocol\" on this entry or use Open)";
       }
     }
 
@@ -625,9 +677,33 @@
       return button;
     }
 
-    function render(config) {
+    let lastConfig = {};
+
+    function addPageRow(page, index) {
+      const row = document.createElement("div");
+      row.className = "page-row";
+      const b = addButton(row, "↗", page.title || page.webpage || page.url || `Webpage ${index + 1}`, (btn) => showPage(page, btn));
+      const small = (label, glyph, title, fn) => {
+        const x = document.createElement("button");
+        x.type = "button"; x.className = "row-btn"; x.textContent = glyph; x.title = title;
+        x.setAttribute("aria-label", `${title}: ${label}`);
+        x.addEventListener("click", fn);
+        row.append(x);
+      };
+      small(page.title || "", "✎", "Edit", () => openEditor("edit", index));
+      small(page.title || "", "✕", "Remove", () => openEditor("remove", index));
+      pagesElement.append(row);
+      pageButtons.set(page, b);
+      return b;
+    }
+
+    function render(config, focusPage) {
+      lastConfig = config;
       const pages = config.webapages || config.webpages || [];
       currentPages = pages;
+      menusElement.replaceChildren();
+      pagesElement.replaceChildren();
+      pageButtons.clear();
       const menus = config.menus || [
         { type: "previews", title: "Overview" },
         { type: "system", title: "System" },
@@ -643,17 +719,72 @@
         const b = addButton(menusElement, icons[menu.type] || "•", menu.title || menu.type, (btn) => showMenu(menu, btn));
         first.push(() => showMenu(menu, b));
       });
+      const pageStarts = [];
       pages.forEach((page, i) => {
-        const b = addButton(pagesElement, "↗", page.title || page.webpage || page.url || `Webpage ${i + 1}`, (btn) => showPage(page, btn));
-        pageButtons.set(page, b);
-        first.push(() => showPage(page, b));
+        const b = addPageRow(page, i);
+        pageStarts.push(() => showPage(page, b));
+        first.push(pageStarts[i]);
       });
+      const add = addButton(pagesElement, "+", "Add webpage", () => openEditor("add"));
+      add.classList.add("add");
       $("#menus-label").hidden = !menus.length;
-      $("#pages-label").hidden = !pages.length;
+      $("#pages-label").hidden = false;
 
-      if (first.length) first[0]();
+      if (focusPage != null && pageStarts[focusPage]) pageStarts[focusPage]();
+      else if (first.length) first[0]();
       else titleElement.textContent = `Welcome to ${config.device || "your device"}`;
     }
+
+    /* ------------------------------------------- add / edit / remove */
+    const editor = $("#editor");
+    let editState = null;
+
+    function openEditor(action, index) {
+      editState = { action, index };
+      const page = action === "add" ? {} : currentPages[index] || {};
+      $("#editor-heading").textContent = { add: "Add webpage", edit: "Edit webpage", remove: "Remove webpage" }[action];
+      $("#editor-fields").hidden = action === "remove";
+      for (const id of ["#ed-title", "#ed-address"]) $(id).required = action !== "remove";
+      $("#editor-remove-text").hidden = action !== "remove";
+      $("#editor-remove-text").textContent = `Remove "${page.title || page.webpage || "this entry"}" from the list?`;
+      $("#ed-title").value = page.title || "";
+      $("#ed-address").value = page.webpage || page.url || page.href || "";
+      $("#ed-protocol").value = page.protocol || page.scheme || "";
+      $("#ed-password").value = "";
+      $("#editor-error").textContent = lastConfig.editable ? "" : "No password is set yet. Run  ./server.py --set-password  on the device first.";
+      const submit = $("#ed-submit");
+      submit.textContent = action === "remove" ? "Remove" : "Save";
+      submit.className = action === "remove" ? "btn danger" : "btn primary";
+      editor.showModal();
+      (action === "remove" ? $("#ed-password") : $("#ed-title")).focus();
+    }
+
+    $("#ed-cancel").addEventListener("click", () => editor.close());
+    $("#editor-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const { action, index } = editState;
+      const body = { action, password: $("#ed-password").value };
+      if (action !== "add") body.index = index;
+      if (action !== "remove") {
+        body.page = { title: $("#ed-title").value, webpage: $("#ed-address").value, protocol: $("#ed-protocol").value };
+      }
+      const submit = $("#ed-submit");
+      submit.disabled = true;
+      $("#editor-error").textContent = "";
+      try {
+        const res = await fetch("/api/pages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        editor.close();
+        const config = await fetchConfig();
+        render(config, action === "remove" ? null : (action === "add" ? data.pages.length - 1 : index));
+      } catch (err) {
+        $("#editor-error").textContent = err.message;
+      } finally {
+        submit.disabled = false;
+        $("#ed-password").value = "";
+      }
+    });
 
     $("#reload").addEventListener("click", () => { if (reloadCurrent) reloadCurrent(); });
 

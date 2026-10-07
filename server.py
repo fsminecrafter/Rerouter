@@ -7,10 +7,17 @@
   anything else is handled as ordinary HTTP.
 * /api/system        -> device status
 * /api/feeds/<group> -> merged RSS/Atom feeds for a group from config.json
+* POST /api/pages    -> add/edit/remove webpage entries (needs the password whose
+                        PBKDF2 hash is stored as "password_hash" in config.json)
+
+Set the password with:  ./server.py --set-password
 
 Environment / flags: HOST, PORT, CERT, KEY, NO_TLS=1 (or --no-tls)
 """
 import argparse
+import getpass
+import hashlib
+import hmac
 import html
 import json
 import os
@@ -20,6 +27,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -36,7 +44,7 @@ ROOT = Path(__file__).resolve().parent
 STARTED = time.time()
 
 # Only these files are ever served from disk (certs/, .git, server.py, ... are not).
-STATIC = {"/": "index.html", "/index.html": "index.html", "/config.json": "config.json"}
+STATIC = {"/": "index.html", "/index.html": "index.html"}   # /config.json is served filtered, see below
 
 FEED_TTL_DEFAULT = 600          # seconds, override with "refresh_seconds" in config.json
 FEED_FORCE_MIN_AGE = 30         # a manual refresh can't hammer sources more often than this
@@ -329,6 +337,147 @@ def system_info():
 
 
 # --------------------------------------------------------------------------
+# config editing + password (PBKDF2-HMAC-SHA256, stdlib only)
+# --------------------------------------------------------------------------
+PBKDF2_ITERATIONS = 200_000
+ADDRESS_RE = re.compile(r"^(https?://\S+|:\d{1,5}(/\S*)?|[\w.-]+:\d{1,5}(/\S*)?|/\S*)$")
+MAX_BODY = 8192
+_config_lock = threading.Lock()
+_failures = {}   # client ip -> [count, first_failure, locked_until]
+MAX_FAILURES, FAIL_WINDOW, LOCKOUT = 5, 600, 300
+
+
+class ApiError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status, self.message = status, message
+
+
+def hash_password(password, iterations=PBKDF2_ITERATIONS):
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password, stored):
+    try:
+        algo, iterations, salt, digest = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        check = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                    bytes.fromhex(salt), int(iterations))
+        return hmac.compare_digest(check.hex(), digest)
+    except (ValueError, AttributeError):
+        return False
+
+
+def write_config(cfg):
+    tmp = ROOT / "config.json.tmp"
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, ROOT / "config.json")
+
+
+def public_config():
+    """config.json as sent to browsers: never includes the password hash."""
+    cfg = load_config()
+    editable = bool(cfg.pop("password_hash", ""))
+    cfg["editable"] = editable
+    return cfg
+
+
+def pages_key(cfg):
+    for key in ("webapages", "webpages"):
+        if key in cfg:
+            return key
+    return "webapages"
+
+
+def validate_page(page):
+    if not isinstance(page, dict):
+        raise ApiError(400, "missing page data")
+    title = str(page.get("title", "")).strip()
+    webpage = str(page.get("webpage", "")).strip()
+    protocol = str(page.get("protocol", "")).strip().lower()
+    if not title or len(title) > 60:
+        raise ApiError(400, "title is required (max 60 characters)")
+    if not webpage or len(webpage) > 300 or not ADDRESS_RE.match(webpage):
+        raise ApiError(400, "address must look like :3000/path, host:3000/path, /path or http(s)://...")
+    if protocol not in ("", "http", "https"):
+        raise ApiError(400, "protocol must be empty (auto), http or https")
+    entry = {"webpage": webpage, "title": title}
+    if protocol:
+        entry["protocol"] = protocol
+    return entry
+
+
+def check_lockout(ip):
+    rec = _failures.get(ip)
+    if rec and rec[2] > time.time():
+        raise ApiError(429, f"too many wrong passwords - try again in {int(rec[2] - time.time())}s")
+
+
+def record_failure(ip):
+    now = time.time()
+    rec = _failures.get(ip)
+    if not rec or now - rec[1] > FAIL_WINDOW:
+        rec = _failures[ip] = [0, now, 0]
+    rec[0] += 1
+    if rec[0] >= MAX_FAILURES:
+        rec[2] = now + LOCKOUT
+        rec[0], rec[1] = 0, now
+
+
+def edit_pages(body, ip):
+    """add / edit / remove a webpage entry. Always requires the password."""
+    check_lockout(ip)
+    action = body.get("action")
+    if action not in ("add", "edit", "remove"):
+        raise ApiError(400, "unknown action")
+    password = body.get("password")
+    if not isinstance(password, str) or not password:
+        raise ApiError(401, "password required")
+    with _config_lock:
+        cfg = load_config()
+        stored = cfg.get("password_hash", "")
+        if not stored:
+            raise ApiError(403, "editing is disabled: run './server.py --set-password' on the device first")
+        if not verify_password(password, stored):
+            record_failure(ip)
+            raise ApiError(401, "wrong password")
+        _failures.pop(ip, None)
+        key = pages_key(cfg)
+        pages = cfg.setdefault(key, [])
+        if action == "add":
+            pages.append(validate_page(body.get("page")))
+        else:
+            index = body.get("index")
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(pages):
+                raise ApiError(400, "entry no longer exists - reload the page")
+            if action == "edit":
+                pages[index] = validate_page(body.get("page"))
+            else:
+                pages.pop(index)
+        write_config(cfg)
+        return {"ok": True, "pages": pages}
+
+
+def set_password_cli():
+    if sys.stdin.isatty():
+        first = getpass.getpass("New Rerouter password: ")
+        if first != getpass.getpass("Repeat password: "):
+            sys.exit("Passwords do not match.")
+    else:
+        first = sys.stdin.readline().rstrip("\r\n")
+    if len(first) < 6:
+        sys.exit("Password must be at least 6 characters.")
+    with _config_lock:
+        cfg = load_config()
+        cfg["password_hash"] = hash_password(first)
+        write_config(cfg)
+    print("Password saved to config.json (stored as a PBKDF2 hash).")
+
+
+# --------------------------------------------------------------------------
 # HTTP handler
 # --------------------------------------------------------------------------
 class Handler(SimpleHTTPRequestHandler):
@@ -370,10 +519,37 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path.startswith("/api/"):
             return self._api(parsed)
+        if parsed.path == "/config.json":
+            try:
+                return self._send_json(public_config())
+            except (OSError, ValueError) as exc:
+                return self._send_json({"error": f"bad config.json: {exc}"}, 500)
         if parsed.path in STATIC:
             self.path = "/" + STATIC[parsed.path]
             return super().do_GET()
         self.send_error(404, "Not found")
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/api/pages":
+            return self._send_json({"error": "not found"}, 404)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if not 0 < length <= MAX_BODY:
+                raise ApiError(413, "request body too large or empty")
+            raw = self.rfile.read(length)   # always drain the body before replying (clean TLS close)
+            if "application/json" not in self.headers.get("Content-Type", ""):
+                raise ApiError(415, "expected application/json")
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                raise ApiError(400, "invalid JSON")
+            if not isinstance(body, dict):
+                raise ApiError(400, "invalid JSON")
+            self._send_json(edit_pages(body, self.client_address[0]))
+        except ApiError as err:
+            self._send_json({"error": err.message}, err.status)
+        except (OSError, ValueError) as exc:
+            self._send_json({"error": f"could not update config.json: {exc}"}, 500)
 
     def do_HEAD(self):
         parsed = urllib.parse.urlsplit(self.path)
@@ -449,7 +625,16 @@ def main():
     parser.add_argument("--key", default=os.environ.get("KEY", str(ROOT / "certs" / "key.pem")))
     parser.add_argument("--no-tls", action="store_true",
                         default=os.environ.get("NO_TLS", "") not in ("", "0"))
+    parser.add_argument("--set-password", action="store_true",
+                        help="set the password that protects adding/editing/removing entries")
+    parser.add_argument("--check-password", action="store_true",
+                        help="exit 0 if a password is configured, 1 otherwise")
     args = parser.parse_args()
+
+    if args.set_password:
+        return set_password_cli()
+    if args.check_password:
+        sys.exit(0 if load_config().get("password_hash") else 1)
 
     server = DualProtocolServer((args.host, args.port), Handler)
 

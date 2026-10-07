@@ -95,6 +95,22 @@ if [ "$NO_TLS" -eq 0 ]; then
   fi
 fi
 
+# password that protects adding / editing / removing entries in the web UI
+run_as_user() {
+  if [ "$(id -u)" -eq 0 ] && [ "$RUN_USER" != "root" ]; then sudo -u "$RUN_USER" "$@"; else "$@"; fi
+}
+if ! run_as_user test -w "$APP_DIR"; then
+  echo "WARNING: $APP_DIR is not writable by '$RUN_USER' - editing entries from the web UI will fail." >&2
+fi
+if ! run_as_user "$PY" "$APP_DIR/server.py" --check-password 2>/dev/null; then
+  if [ -t 0 ]; then
+    echo "Set a password for adding/editing/removing entries in the web UI (stored hashed in config.json):"
+    run_as_user "$PY" "$APP_DIR/server.py" --set-password || echo "Skipped - run ./server.py --set-password later."
+  else
+    echo "No web UI password set yet - run: ./server.py --set-password"
+  fi
+fi
+
 TLS_ENV=""
 [ "$NO_TLS" -eq 1 ] && TLS_ENV="Environment=NO_TLS=1"
 
