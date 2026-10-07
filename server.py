@@ -22,6 +22,7 @@ import ssl
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -39,11 +40,12 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/config.json": "confi
 
 FEED_TTL_DEFAULT = 600          # seconds, override with "refresh_seconds" in config.json
 FEED_FORCE_MIN_AGE = 30         # a manual refresh can't hammer sources more often than this
+FEED_RETRY_AFTER = 60           # a failed source is retried after this many seconds
+FEED_TIMEOUT = 15               # per-source network timeout (slow devices / slow feeds)
+CACHE_FILE = ROOT / "cache" / "feeds.json"
 MAX_FEED_BYTES = 2 * 1024 * 1024
-USER_AGENT = "Rerouter/1.1 (+https://github.com/fsminecrafter/Rerouter)"
+USER_AGENT = "Mozilla/5.0 (compatible; Rerouter/1.2; +https://github.com/fsminecrafter/Rerouter)"
 
-_cache = {}
-_cache_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -120,7 +122,23 @@ def parse_feed(data, source):
     return items
 
 
-def fetch_source(src):
+def _describe(exc):
+    """Short, human-readable reason a source failed (shown in the UI)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, ET.ParseError):
+        return "not a valid RSS/Atom feed"
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "TLS certificate check failed (wrong device clock or missing CA certificates?)"
+    if isinstance(reason, socket.gaierror):
+        return "DNS lookup failed"
+    if isinstance(reason, (socket.timeout, TimeoutError)) or "timed out" in str(reason):
+        return "timed out"
+    return (str(reason) or type(exc).__name__)[:100]
+
+
+def fetch_source(src, verify_tls=True):
     url = _safe_url(src.get("url"))
     if not url:
         raise ValueError("missing or invalid url")
@@ -128,48 +146,132 @@ def fetch_source(src):
         "User-Agent": USER_AGENT,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     })
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        data = resp.read(MAX_FEED_BYTES + 1)
-    if len(data) > MAX_FEED_BYTES:
-        raise ValueError("feed too large")
-    name = src.get("name") or urllib.parse.urlsplit(url).netloc
-    return parse_feed(data, name)
+    ctx = None if verify_tls else ssl._create_unverified_context()
+    last = None
+    for attempt in range(2):  # one retry for flaky/slow feeds
+        try:
+            with urllib.request.urlopen(req, timeout=FEED_TIMEOUT, context=ctx) as resp:
+                data = resp.read(MAX_FEED_BYTES + 1)
+            if len(data) > MAX_FEED_BYTES:
+                raise ValueError("feed too large")
+            name = src.get("name") or urllib.parse.urlsplit(url).netloc
+            return parse_feed(data, name)
+        except ET.ParseError:
+            raise
+        except Exception as exc:
+            last = exc
+            time.sleep(1)
+    raise last
+
+
+# ---- per-source cache: in memory + persisted to cache/feeds.json -------------
+# entry = {"name", "items", "fetched", "expires", "error"}
+_sources = {}
+_inflight = set()
+_state_lock = threading.Lock()
+_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="feed")
+
+
+def _load_disk_cache():
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _sources.update({k: v for k, v in data.items() if isinstance(v, dict) and "items" in v})
+    except (OSError, ValueError):
+        pass
+
+
+def _save_disk_cache():
+    try:
+        with _state_lock:
+            snapshot = json.dumps(_sources)
+        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(snapshot, encoding="utf-8")
+        os.replace(tmp, CACHE_FILE)
+    except OSError:
+        pass
+
+
+def _refresh_source(src, cfg):
+    url = src.get("url", "")
+    name = src.get("name") or url
+    try:
+        items = fetch_source(src, cfg["verify_tls"])[: cfg["per_source"]]
+        entry = {"name": name, "items": items, "fetched": time.time(),
+                 "expires": time.time() + cfg["ttl"], "error": None}
+    except Exception as exc:
+        with _state_lock:
+            old = _sources.get(url) or {}
+        # keep the last good items; retry sooner than a normal refresh
+        entry = {"name": name, "items": old.get("items", []), "fetched": old.get("fetched", 0),
+                 "expires": time.time() + min(cfg["ttl"], FEED_RETRY_AFTER), "error": _describe(exc)}
+    with _state_lock:
+        _sources[url] = entry
+        _inflight.discard(url)
+    _save_disk_cache()
+
+
+def _kick(src, cfg):
+    url = src.get("url", "")
+    with _state_lock:
+        if url in _inflight:
+            return
+        _inflight.add(url)
+    _pool.submit(_refresh_source, src, cfg)
+
+
+def _feed_settings():
+    cfg = load_config()
+    return cfg, {
+        "ttl": int(cfg.get("refresh_seconds", FEED_TTL_DEFAULT)),
+        "per_source": int(cfg.get("items_per_source", 15)),
+        "max_items": int(cfg.get("max_items", 80)),
+        "verify_tls": cfg.get("feed_verify_tls", True) is not False,
+    }
 
 
 def get_feed_group(group, force=False):
-    cfg = load_config()
+    """Returns immediately with whatever is cached; stale/missing sources refresh in the background."""
+    cfg, st = _feed_settings()
     sources = (cfg.get("feeds") or {}).get(group)
     if not isinstance(sources, list):
         return None
-    ttl = int(cfg.get("refresh_seconds", FEED_TTL_DEFAULT))
-    per_source = int(cfg.get("items_per_source", 15))
-    max_items = int(cfg.get("max_items", 80))
-    key = (group, json.dumps(sources, sort_keys=True))
-
-    with _cache_lock:
-        hit = _cache.get(key)
-    if hit and time.time() - hit["fetched"] < (FEED_FORCE_MIN_AGE if force else ttl):
-        return hit["data"]
-
-    items, errors = [], []
-    if sources:
-        with ThreadPoolExecutor(max_workers=min(8, len(sources))) as pool:
-            jobs = [(s, pool.submit(fetch_source, s)) for s in sources]
-            for src, job in jobs:
-                try:
-                    items.extend(job.result()[:per_source])
-                except Exception as exc:  # one bad feed must not break the group
-                    errors.append({"source": src.get("name") or src.get("url", "?"),
-                                   "error": str(exc)[:120]})
-    if not items and errors and hit:
-        return hit["data"]  # serve stale data rather than an empty list
-
+    now = time.time()
+    items, errors, pending, fetched = [], [], [], 0
+    for src in sources:
+        url = src.get("url", "")
+        name = src.get("name") or url
+        with _state_lock:
+            entry = _sources.get(url)
+        due = (entry is None or now >= entry["expires"]
+               or (force and now - entry.get("fetched", 0) > FEED_FORCE_MIN_AGE))
+        if due:
+            _kick(src, st)
+        if entry is None:
+            pending.append(name)
+            continue
+        items.extend(entry["items"])
+        fetched = max(fetched, entry.get("fetched", 0))
+        if entry.get("error"):
+            errors.append({"source": name, "error": entry["error"]})
+    with _state_lock:
+        loading = any(s.get("url", "") in _inflight for s in sources)
     items.sort(key=lambda i: i["published"] or 0, reverse=True)
-    data = {"group": group, "fetched": time.time(), "items": items[:max_items],
-            "sources": [s.get("name") or s.get("url") for s in sources], "errors": errors}
-    with _cache_lock:
-        _cache[key] = {"fetched": time.time(), "data": data}
-    return data
+    return {"group": group, "fetched": fetched, "items": items[: st["max_items"]],
+            "sources": [s.get("name") or s.get("url") for s in sources],
+            "errors": errors, "pending": pending, "loading": loading}
+
+
+def warm_feeds():
+    """At startup: load the disk cache (instant first page) and refresh anything expired."""
+    _load_disk_cache()
+    try:
+        for group in (load_config().get("feeds") or {}):
+            get_feed_group(group)
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -365,6 +467,7 @@ def main():
         except (OSError, ssl.SSLError, subprocess.CalledProcessError) as exc:
             print(f"WARNING: HTTPS disabled ({exc})")
 
+    warm_feeds()
     shown = args.host if args.host != "0.0.0.0" else "localhost"
     print(f"Serving Rerouter at http://{shown}:{args.port}")
     if TLS_ENABLED:

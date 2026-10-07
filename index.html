@@ -221,6 +221,21 @@
     .summary { margin-top: 5px; color: #5d6862; font-size: 12px; line-height: 1.5; }
     .feed-errors { margin-top: 14px; color: #a0623a; font-size: 12px; }
 
+    .preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+    .preview { display: block; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: #fbfcf9;
+               color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; }
+    .preview:hover { border-color: #aeb9af; }
+    .preview .thumb { position: relative; height: 170px; overflow: hidden; background: #fff; border-bottom: 1px solid var(--line); }
+    .preview iframe { position: absolute; top: 0; left: 0; width: 1280px; height: 800px; border: 0;
+                      transform-origin: 0 0; pointer-events: none; }
+    .preview .thumb .fallback { position: absolute; inset: 0; z-index: -1; display: grid; place-content: center;
+                                padding: 12px; color: var(--muted); font-size: 12px; text-align: center; }
+    .preview .label { padding: 10px 12px; }
+    .preview .label b { display: block; font-size: 13px; }
+    .preview .label span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .retry { margin-top: 10px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px;
+             background: #fbfcf9; font: inherit; font-size: 12px; cursor: pointer; }
+
     /* ---- terminal boot animation ---- */
     #boot {
       position: fixed; inset: 0; z-index: 100; padding: 26px; overflow: hidden; cursor: pointer;
@@ -298,6 +313,8 @@
     const openLink = $("#open");
     let reloadCurrent = null;
     let viewToken = 0;
+    let currentPages = [];
+    const pageButtons = new Map();
 
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -409,18 +426,31 @@
     const safeHref = (u) => (/^https?:\/\//i.test(u || "") ? u : "");
 
     /* ------------------------------------------------------ built-in views */
-    function makePanel() {
+    async function fetchJson(url, ms = 20000) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), ms);
+      try {
+        const res = await fetch(url, { cache: "no-store", signal: ctl.signal });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        return data;
+      } catch (err) {
+        throw new Error(err.name === "AbortError" ? "timed out waiting for the server" : err.message);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function makePanel(msg = "Loading…") {
       const panel = document.createElement("div");
       panel.className = "panel";
-      panel.innerHTML = '<p class="note">Loading…</p>';
+      panel.innerHTML = `<p class="note">${esc(msg)}</p>`;
       frameWrap.replaceChildren(panel);
       return panel;
     }
 
     async function renderSystem(panel, token) {
-      const res = await fetch("/api/system", { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const s = await res.json();
+      const s = await fetchJson("/api/system", 10000);
       if (token !== viewToken) return;
       const cards = [];
       const card = (label, value, pct) => cards.push(
@@ -443,10 +473,8 @@
     }
 
     async function renderFeed(panel, token, group, force) {
-      const res = await fetch(`/api/feeds/${encodeURIComponent(group)}${force ? "?force=1" : ""}`, { cache: "no-store" });
-      const data = await res.json().catch(() => ({}));
+      let data = await fetchJson(`/api/feeds/${encodeURIComponent(group)}${force ? "?force=1" : ""}`, 25000);
       if (token !== viewToken) return;
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
       let active = "All";
       const draw = () => {
@@ -459,9 +487,12 @@
           return `<div class="feed-item">${title}<div class="meta">${esc(i.source)}${i.published ? " · " + ago(i.published) : ""}</div>` +
                  (i.summary ? `<div class="summary">${esc(i.summary)}</div>` : "") + "</div>";
         }).join("");
+        const status = data.loading
+          ? `<p class="note">Updating ${data.pending.length ? esc(data.pending.join(", ")) : "sources"}…</p>` : "";
         const errors = data.errors.length
-          ? `<div class="feed-errors">Unavailable: ${data.errors.map((e) => esc(e.source)).join(", ")}</div>` : "";
-        panel.innerHTML = `<div class="chips">${chips}</div>${list || '<p class="note">No items.</p>'}${errors}`;
+          ? `<div class="feed-errors">${data.errors.map((e) => `${esc(e.source)}: ${esc(e.error)}`).join("<br>")}</div>` : "";
+        const empty = data.loading ? "" : '<p class="note">No items.</p>';
+        panel.innerHTML = `<div class="chips">${chips}</div>${status}${list || empty}${errors}`;
       };
       panel.addEventListener("click", (e) => {
         const chip = e.target.closest(".chip");
@@ -472,6 +503,49 @@
         panel.scrollTop = top;
       });
       draw();
+
+      // The server answers instantly from its cache and refreshes in the background;
+      // keep polling while it is still fetching so new items appear as they arrive.
+      for (let i = 0; i < 45 && data.loading; i++) {
+        await sleep(2000);
+        if (token !== viewToken) return;
+        try { data = await fetchJson(`/api/feeds/${encodeURIComponent(group)}`, 15000); } catch (e) { break; }
+        if (token !== viewToken) return;
+        const top = panel.scrollTop;
+        draw();
+        panel.scrollTop = top;
+      }
+    }
+
+    function renderPreviews(panel, pages) {
+      if (!pages.length) { panel.innerHTML = '<p class="note">No webpages configured.</p>'; return; }
+      const grid = document.createElement("div");
+      grid.className = "preview-grid";
+      pages.forEach((page) => {
+        const address = resolvePage(page);
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "preview";
+        const blocked = location.protocol === "https:" && address.startsWith("http:");
+        card.innerHTML = `<div class="thumb"><div class="fallback">${blocked ? "Preview blocked (http page inside https)" : "Loading preview…"}</div></div>` +
+          `<div class="label"><b>${esc(page.title || address)}</b><span>${esc(address)}</span></div>`;
+        const thumb = card.querySelector(".thumb");
+        if (!blocked) {
+          const frame = document.createElement("iframe");
+          frame.src = address;
+          frame.loading = "lazy";
+          frame.tabIndex = -1;
+          frame.setAttribute("aria-hidden", "true");
+          frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
+          thumb.append(frame);
+          const fit = () => { frame.style.transform = `scale(${thumb.clientWidth / 1280})`; };
+          new ResizeObserver(fit).observe(thumb);
+          fit();
+        }
+        card.addEventListener("click", () => { const b = pageButtons.get(page); if (b) b.click(); });
+        grid.append(card);
+      });
+      panel.replaceChildren(grid);
     }
 
     function selectButton(button) {
@@ -482,17 +556,22 @@
     function showMenu(menu, button) {
       selectButton(button);
       titleElement.textContent = menu.title || menu.type;
-      addressElement.textContent = menu.type === "system" ? "Device status" : `Feed group: ${menu.feed}`;
+      addressElement.textContent = menu.type === "system" ? "Device status"
+        : menu.type === "previews" ? "Live previews of your webpages" : `Feed group: ${menu.feed}`;
       openLink.style.display = "none";
       const load = async (force) => {
         const token = ++viewToken;
-        const panel = makePanel();
+        const panel = makePanel(menu.type === "feed" ? "Loading feeds…" : "Loading…");
         try {
-          if (menu.type === "system") await renderSystem(panel, token);
+          if (menu.type === "previews") renderPreviews(panel, currentPages);
+          else if (menu.type === "system") await renderSystem(panel, token);
           else if (menu.type === "feed") await renderFeed(panel, token, menu.feed, force);
           else throw new Error(`unknown menu type "${menu.type}"`);
         } catch (err) {
-          if (token === viewToken) panel.innerHTML = `<p class="note">Could not load: ${esc(err.message)}</p>`;
+          if (token === viewToken) {
+            panel.innerHTML = `<p class="note">Could not load: ${esc(err.message)}</p><button class="retry" type="button">Retry</button>`;
+            panel.querySelector(".retry").addEventListener("click", () => load(true));
+          }
         }
       };
       reloadCurrent = () => load(true);
@@ -548,7 +627,9 @@
 
     function render(config) {
       const pages = config.webapages || config.webpages || [];
+      currentPages = pages;
       const menus = config.menus || [
+        { type: "previews", title: "Overview" },
         { type: "system", title: "System" },
         { type: "feed", title: "Dev RSS", feed: "dev" },
         { type: "feed", title: "News", feed: "news" },
@@ -556,7 +637,7 @@
       $("#device").textContent = config.device || "Device";
       document.title = config.device ? `Welcome to ${config.device}` : "Website viewer";
 
-      const icons = { system: "▤", feed: "≡" };
+      const icons = { system: "▤", feed: "≡", previews: "▦" };
       const first = [];
       menus.forEach((menu) => {
         const b = addButton(menusElement, icons[menu.type] || "•", menu.title || menu.type, (btn) => showMenu(menu, btn));
@@ -564,6 +645,7 @@
       });
       pages.forEach((page, i) => {
         const b = addButton(pagesElement, "↗", page.title || page.webpage || page.url || `Webpage ${i + 1}`, (btn) => showPage(page, btn));
+        pageButtons.set(page, b);
         first.push(() => showPage(page, b));
       });
       $("#menus-label").hidden = !menus.length;
