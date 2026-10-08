@@ -236,6 +236,40 @@
     .retry { margin-top: 10px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px;
              background: #fbfcf9; font: inherit; font-size: 12px; cursor: pointer; }
 
+    /* ---- custom System items ---- */
+    .section-head { display: flex; align-items: center; justify-content: space-between; margin: 26px 0 10px;
+                    color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .custom-list { display: grid; gap: 8px; }
+    .custom { padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcf9; }
+    .custom-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .custom-top b { font-size: 13px; }
+    .custom-actions { display: flex; gap: 2px; }
+    .mini { min-width: 26px; height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent;
+            color: #7f8a82; font: inherit; font-size: 12px; cursor: pointer; }
+    .mini:hover { background: #edf0eb; color: var(--ink); }
+    .custom p { margin: 6px 0 0; color: #5d6862; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .custom code, .custom pre { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    .custom pre.out { margin: 8px 0 0; padding: 9px 10px; max-height: 220px; overflow: auto; border-radius: 5px;
+                      background: #192420; color: #d6e8c8; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+    /* ---- post-it wall ---- */
+    .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; align-items: start; }
+    .postit { position: relative; display: flex; flex-direction: column; min-height: 150px; padding: 10px 12px 6px;
+              border-radius: 3px; box-shadow: 0 1px 2px rgba(25, 36, 32, .12); transition: box-shadow .15s; }
+    .postit:hover, .postit:focus-within { box-shadow: 0 3px 8px rgba(25, 36, 32, .16); }
+    .postit textarea { flex: 1; width: 100%; min-height: 100px; padding: 0; border: 0; outline: 0; resize: none;
+                       background: transparent; color: #2b2f22; font: inherit; font-size: 13px; line-height: 1.45; }
+    .postit-bar { display: flex; justify-content: space-between; height: 22px; opacity: 0; transition: opacity .15s; }
+    .postit:hover .postit-bar, .postit:focus-within .postit-bar { opacity: 1; }
+    @media (hover: none) { .postit-bar { opacity: 1; } }
+    .postit-bar button { width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent;
+                         color: rgba(25, 36, 32, .5); font-size: 12px; cursor: pointer; }
+    .postit-bar button:hover { background: rgba(25, 36, 32, .1); color: var(--ink); }
+    .postit.new { align-items: center; justify-content: center; min-height: 150px; border: 1px dashed #c4ccc3; box-shadow: none;
+                  background: transparent; color: var(--muted); font: inherit; font-size: 22px; cursor: pointer; }
+    .postit.new:hover { border-color: #9aa89b; color: var(--ink); }
+    .wall-error { margin: 0 0 12px; color: #b3432f; font-size: 12px; }
+
     [hidden] { display: none !important; }
     .page-row { display: flex; align-items: center; gap: 2px; }
     .page-row .page-link { flex: 1; min-width: 0; }
@@ -246,15 +280,15 @@
     @media (hover: none) { .row-btn { display: grid; } }
     .page-link.add { color: var(--muted); }
 
-    dialog#editor { width: min(420px, 92vw); padding: 22px; border: 1px solid var(--line); border-radius: 10px;
+    dialog#editor, dialog#sys-editor { width: min(420px, 92vw); padding: 22px; border: 1px solid var(--line); border-radius: 10px;
                     background: #fbfcf9; color: var(--ink); font: inherit; }
-    dialog#editor::backdrop { background: rgba(25, 36, 32, .35); }
-    #editor h2 { margin: 0 0 14px; font-size: 16px; }
-    #editor label { display: block; margin: 0 0 12px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
-    #editor input, #editor select { display: block; width: 100%; margin-top: 5px; padding: 8px 10px; border: 1px solid var(--line);
+    dialog#editor::backdrop, dialog#sys-editor::backdrop { background: rgba(25, 36, 32, .35); }
+    #editor h2, #sys-editor h2 { margin: 0 0 14px; font-size: 16px; }
+    #editor label, #sys-editor label { display: block; margin: 0 0 12px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    #editor input, #editor select, #sys-editor input, #sys-editor select, #sys-editor textarea { display: block; width: 100%; margin-top: 5px; padding: 8px 10px; border: 1px solid var(--line);
                     border-radius: 6px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 400; text-transform: none; }
-    #editor .help { margin: -6px 0 12px; color: var(--muted); font-size: 11px; }
-    #editor-error { min-height: 16px; margin: 4px 0 0; color: #b3432f; font-size: 12px; }
+    #editor .help, #sys-editor .help { margin: -6px 0 12px; color: var(--muted); font-size: 11px; }
+    #editor-error, .editor-error { min-height: 16px; margin: 4px 0 0; color: #b3432f; font-size: 12px; }
     .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .btn { padding: 7px 14px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcf9; font: inherit; font-size: 13px; cursor: pointer; }
     .btn.primary { border-color: #9fd563; background: var(--accent); color: #1d3210; font-weight: 650; }
@@ -351,6 +385,31 @@
       <div class="dlg-actions">
         <button class="btn" type="button" id="ed-cancel">Cancel</button>
         <button class="btn primary" type="submit" id="ed-submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="sys-editor">
+    <form id="sys-form" autocomplete="off">
+      <h2 id="sys-heading">Add item</h2>
+      <div id="sys-fields">
+        <label>Title<input id="si-title" type="text" maxlength="60" required></label>
+        <label>Type
+          <select id="si-type">
+            <option value="message">Message</option>
+            <option value="command">Command (runs on this device)</option>
+          </select>
+        </label>
+        <label><span id="si-body-label">Message</span>
+          <textarea id="si-body" rows="3" maxlength="500" required></textarea>
+        </label>
+        <p class="help" id="si-help" hidden>Runs on the device with a 10 second limit when someone presses Run. Only you (with the password) can change it.</p>
+      </div>
+      <p id="sys-remove-text" hidden></p>
+      <label>Password<input id="si-password" type="password" required></label>
+      <p id="sys-error" class="editor-error" role="alert"></p>
+      <div class="dlg-actions">
+        <button class="btn" type="button" id="si-cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="si-submit">Save</button>
       </div>
     </form>
   </dialog>
@@ -520,7 +579,53 @@
       if (s.cpu_temp != null) card("CPU temp", `${s.cpu_temp.toFixed(1)} °C`);
       card("Rerouter", `python ${s.python}, up ${duration(s.service_uptime)}`);
       card("Transport", s.tls ? "HTTP + HTTPS" : "HTTP only");
-      panel.innerHTML = `<div class="stat-grid">${cards.join("")}</div>`;
+      panel.innerHTML = `<div class="stat-grid">${cards.join("")}</div>` +
+        '<div class="section-head"><span>Custom</span><button class="btn" id="sys-add" type="button">+ Add</button></div>' +
+        '<div class="custom-list" id="custom-list"></div>';
+      let items = [];
+      try { const cfg = await fetchConfig(); lastConfig = cfg; items = cfg.system_items || []; } catch (e) {}
+      if (token !== viewToken) return;
+      drawCustom(panel, items);
+    }
+
+    function drawCustom(panel, items) {
+      const list = panel.querySelector("#custom-list");
+      if (!items.length) {
+        list.innerHTML = '<p class="note">Nothing here yet. Add a message or a command.</p>';
+      } else {
+        list.innerHTML = items.map((it, i) => {
+          const isCmd = it.type === "command";
+          const body = isCmd ? `<p><code>$ ${esc(it.command)}</code></p><pre class="out" hidden></pre>` : `<p>${esc(it.text)}</p>`;
+          return `<div class="custom" data-i="${i}"><div class="custom-top"><b>${esc(it.title)}</b><span class="custom-actions">` +
+            (isCmd ? '<button class="mini" data-act="run" type="button">Run</button>' : "") +
+            '<button class="mini" data-act="edit" type="button" title="Edit">✎</button>' +
+            '<button class="mini" data-act="remove" type="button" title="Remove">✕</button></span></div>' + body + "</div>";
+        }).join("");
+      }
+      panel.onclick = async (e) => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        if (btn.id === "sys-add") return openSysEditor("add", null, items);
+        const row = btn.closest(".custom");
+        if (!row) return;
+        const index = Number(row.dataset.i);
+        if (btn.dataset.act === "edit") return openSysEditor("edit", index, items);
+        if (btn.dataset.act === "remove") return openSysEditor("remove", index, items);
+        if (btn.dataset.act === "run") {
+          const out = row.querySelector(".out");
+          out.hidden = false; out.textContent = "Running…"; btn.disabled = true;
+          try {
+            const res = await fetch("/api/system-items/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ index }) });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            out.textContent = (data.output || "(no output)") + (data.code ? `\n[exit ${data.code}]` : "");
+          } catch (err) {
+            out.textContent = err.message;
+          } finally {
+            btn.disabled = false;
+          }
+        }
+      };
     }
 
     async function renderFeed(panel, token, group, force) {
@@ -568,6 +673,68 @@
       }
     }
 
+    const POSTIT_COLORS = ["#f7f1a8", "#cfe8c4", "#c6dcf0", "#f2cccc", "#e1d3ef", "#f6dcb4"];
+
+    async function renderPostits(panel, token) {
+      let notes = (await fetchJson("/api/postits", 10000)).notes || [];
+      if (token !== viewToken) return;
+      panel.innerHTML = '<p class="wall-error" id="wall-error" hidden></p><div class="wall" id="wall"></div>';
+      const wall = panel.querySelector("#wall");
+      const errorEl = panel.querySelector("#wall-error");
+      const send = async (body) => {
+        try {
+          const res = await fetch("/api/postits", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          errorEl.hidden = true;
+          return data.notes;
+        } catch (err) {
+          errorEl.textContent = err.message; errorEl.hidden = false;
+          return null;
+        }
+      };
+      const draw = (focusLast) => {
+        wall.innerHTML = notes.map((n) =>
+          `<div class="postit" data-id="${esc(n.id)}" style="background:${esc(n.color || POSTIT_COLORS[0])}">` +
+          `<textarea maxlength="500" placeholder="Write something…" aria-label="Note">${esc(n.content || "")}</textarea>` +
+          '<div class="postit-bar"><button data-act="color" type="button" title="Change color" aria-label="Change color">●</button>' +
+          '<button data-act="del" type="button" title="Delete" aria-label="Delete note">✕</button></div></div>').join("") +
+          '<button class="postit new" id="wall-add" type="button" aria-label="Add note">+</button>';
+        if (focusLast) { const t = wall.querySelectorAll("textarea"); if (t.length) t[t.length - 1].focus(); }
+      };
+      wall.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        if (btn.id === "wall-add") {
+          const next = await send({ action: "add", content: "", color: POSTIT_COLORS[notes.length % POSTIT_COLORS.length] });
+          if (next && token === viewToken) { notes = next; draw(true); }
+          return;
+        }
+        const el = btn.closest(".postit");
+        if (!el) return;
+        const note = notes.find((n) => n.id === el.dataset.id);
+        if (!note) return;
+        if (btn.dataset.act === "del") {
+          const next = await send({ action: "remove", id: note.id });
+          if (next) { notes = next; el.remove(); }
+        } else if (btn.dataset.act === "color") {
+          const i = POSTIT_COLORS.indexOf(note.color);
+          note.color = POSTIT_COLORS[(i + 1) % POSTIT_COLORS.length];
+          el.style.background = note.color;
+          send({ action: "update", id: note.id, color: note.color });
+        }
+      });
+      wall.addEventListener("change", (e) => {   // fires when a note loses focus
+        if (!e.target.matches("textarea")) return;
+        const el = e.target.closest(".postit");
+        const note = notes.find((n) => n.id === el.dataset.id);
+        if (!note || note.content === e.target.value) return;
+        note.content = e.target.value;
+        send({ action: "update", id: note.id, content: note.content });
+      });
+      draw(false);
+    }
+
     function renderPreviews(panel, pages) {
       if (!pages.length) { panel.innerHTML = '<p class="note">No webpages configured.</p>'; return; }
       const grid = document.createElement("div");
@@ -608,7 +775,8 @@
       selectButton(button);
       titleElement.textContent = menu.title || menu.type;
       addressElement.textContent = menu.type === "system" ? "Device status"
-        : menu.type === "previews" ? "Live previews of your webpages" : `Feed group: ${menu.feed}`;
+        : menu.type === "previews" ? "Live previews of your webpages"
+        : menu.type === "postit" ? "Post-it wall" : `Feed group: ${menu.feed}`;
       openLink.style.display = "none";
       const load = async (force) => {
         const token = ++viewToken;
@@ -616,6 +784,7 @@
         try {
           if (menu.type === "previews") renderPreviews(panel, currentPages);
           else if (menu.type === "system") await renderSystem(panel, token);
+          else if (menu.type === "postit") await renderPostits(panel, token);
           else if (menu.type === "feed") await renderFeed(panel, token, menu.feed, force);
           else throw new Error(`unknown menu type "${menu.type}"`);
         } catch (err) {
@@ -710,13 +879,14 @@
       const menus = config.menus || [
         { type: "previews", title: "Overview" },
         { type: "system", title: "System" },
+        { type: "postit", title: "Notes" },
         { type: "feed", title: "Dev RSS", feed: "dev" },
         { type: "feed", title: "News", feed: "news" },
       ];
       $("#device").textContent = config.device || "Device";
       document.title = config.device ? `Welcome to ${config.device}` : "Website viewer";
 
-      const icons = { system: "▤", feed: "≡", previews: "▦" };
+      const icons = { system: "▤", feed: "≡", previews: "▦", postit: "▢" };
       const first = [];
       menus.forEach((menu) => {
         const b = addButton(menusElement, icons[menu.type] || "•", menu.title || menu.type, (btn) => showMenu(menu, btn));
@@ -786,6 +956,69 @@
       } finally {
         submit.disabled = false;
         $("#ed-password").value = "";
+      }
+    });
+
+    /* ------------------------------- System page: add / edit / remove items */
+    const sysEditor = $("#sys-editor");
+    let sysState = null;
+
+    function syncSysType() {
+      const cmd = $("#si-type").value === "command";
+      $("#si-body-label").firstChild.textContent = cmd ? "Command" : "Message";
+      $("#si-body").maxLength = cmd ? 300 : 500;
+      $("#si-body").rows = cmd ? 2 : 3;
+      $("#si-body").placeholder = cmd ? "uptime -p" : "";
+      $("#si-help").hidden = !cmd;
+    }
+    $("#si-type").addEventListener("change", syncSysType);
+
+    function openSysEditor(action, index, items) {
+      sysState = { action, index };
+      const item = action === "add" ? {} : items[index] || {};
+      $("#sys-heading").textContent = { add: "Add item", edit: "Edit item", remove: "Remove item" }[action];
+      $("#sys-fields").hidden = action === "remove";
+      for (const id of ["#si-title", "#si-body"]) $(id).required = action !== "remove";
+      $("#sys-remove-text").hidden = action !== "remove";
+      $("#sys-remove-text").textContent = `Remove "${item.title || "this item"}" from the System page?`;
+      $("#si-title").value = item.title || "";
+      $("#si-type").value = item.type === "command" ? "command" : "message";
+      $("#si-body").value = (item.type === "command" ? item.command : item.text) || "";
+      syncSysType();
+      $("#si-password").value = "";
+      $("#sys-error").textContent = lastConfig.editable ? "" : "No password is set yet. Run  ./server.py --set-password  on the device first.";
+      const submit = $("#si-submit");
+      submit.textContent = action === "remove" ? "Remove" : "Save";
+      submit.className = action === "remove" ? "btn danger" : "btn primary";
+      sysEditor.showModal();
+      (action === "remove" ? $("#si-password") : $("#si-title")).focus();
+    }
+
+    $("#si-cancel").addEventListener("click", () => sysEditor.close());
+    $("#sys-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const { action, index } = sysState;
+      const body = { action, password: $("#si-password").value };
+      if (action !== "add") body.index = index;
+      if (action !== "remove") {
+        const cmd = $("#si-type").value === "command";
+        body.item = { title: $("#si-title").value, type: cmd ? "command" : "message" };
+        body.item[cmd ? "command" : "text"] = $("#si-body").value;
+      }
+      const submit = $("#si-submit");
+      submit.disabled = true;
+      $("#sys-error").textContent = "";
+      try {
+        const res = await fetch("/api/system-items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        sysEditor.close();
+        if (reloadCurrent) reloadCurrent();
+      } catch (err) {
+        $("#sys-error").textContent = err.message;
+      } finally {
+        submit.disabled = false;
+        $("#si-password").value = "";
       }
     });
 

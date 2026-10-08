@@ -9,6 +9,10 @@
 * /api/feeds/<group> -> merged RSS/Atom feeds for a group from config.json
 * POST /api/pages    -> add/edit/remove webpage entries (needs the password whose
                         PBKDF2 hash is stored as "password_hash" in config.json)
+* POST /api/system-items      -> add/edit/remove your own messages/commands on the
+                                 System page (same password)
+* POST /api/system-items/run  -> run a stored command and return its output
+* /api/postits       -> the post-it wall (data/postits.json)
 
 Set the password with:  ./server.py --set-password
 
@@ -27,6 +31,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import uuid
 import sys
 import threading
 import time
@@ -427,24 +432,29 @@ def record_failure(ip):
         rec[0], rec[1] = 0, now
 
 
+def authenticate(cfg, body, ip):
+    """Raises ApiError unless body["password"] matches the stored hash."""
+    password = body.get("password")
+    if not isinstance(password, str) or not password:
+        raise ApiError(401, "password required")
+    stored = cfg.get("password_hash", "")
+    if not stored:
+        raise ApiError(403, "editing is disabled: run './server.py --set-password' on the device first")
+    if not verify_password(password, stored):
+        record_failure(ip)
+        raise ApiError(401, "wrong password")
+    _failures.pop(ip, None)
+
+
 def edit_pages(body, ip):
     """add / edit / remove a webpage entry. Always requires the password."""
     check_lockout(ip)
     action = body.get("action")
     if action not in ("add", "edit", "remove"):
         raise ApiError(400, "unknown action")
-    password = body.get("password")
-    if not isinstance(password, str) or not password:
-        raise ApiError(401, "password required")
     with _config_lock:
         cfg = load_config()
-        stored = cfg.get("password_hash", "")
-        if not stored:
-            raise ApiError(403, "editing is disabled: run './server.py --set-password' on the device first")
-        if not verify_password(password, stored):
-            record_failure(ip)
-            raise ApiError(401, "wrong password")
-        _failures.pop(ip, None)
+        authenticate(cfg, body, ip)
         key = pages_key(cfg)
         pages = cfg.setdefault(key, [])
         if action == "add":
@@ -459,6 +469,141 @@ def edit_pages(body, ip):
                 pages.pop(index)
         write_config(cfg)
         return {"ok": True, "pages": pages}
+
+
+# --------------------------------------------------------------------------
+# custom System-page items: your own messages and commands
+# --------------------------------------------------------------------------
+MAX_ITEMS = 40
+RUN_TIMEOUT = 10          # seconds a command may run
+RUN_MIN_GAP = 2           # seconds between two runs of the same item
+MAX_OUTPUT = 8000
+_run_last = {}
+
+
+def validate_item(item):
+    if not isinstance(item, dict):
+        raise ApiError(400, "missing item data")
+    title = str(item.get("title", "")).strip()
+    kind = str(item.get("type", "message")).strip().lower()
+    if not title or len(title) > 60:
+        raise ApiError(400, "title is required (max 60 characters)")
+    if kind == "message":
+        text = str(item.get("text", "")).strip()
+        if not text or len(text) > 500:
+            raise ApiError(400, "message is required (max 500 characters)")
+        return {"title": title, "type": "message", "text": text}
+    if kind == "command":
+        command = str(item.get("command", "")).strip()
+        if not command or len(command) > 300 or "\n" in command or "\r" in command:
+            raise ApiError(400, "command is required (one line, max 300 characters)")
+        return {"title": title, "type": "command", "command": command}
+    raise ApiError(400, "type must be message or command")
+
+
+def edit_system_items(body, ip):
+    """add / edit / remove a custom System-page item. Always requires the password."""
+    check_lockout(ip)
+    action = body.get("action")
+    if action not in ("add", "edit", "remove"):
+        raise ApiError(400, "unknown action")
+    with _config_lock:
+        cfg = load_config()
+        authenticate(cfg, body, ip)
+        items = cfg.setdefault("system_items", [])
+        if action == "add":
+            if len(items) >= MAX_ITEMS:
+                raise ApiError(400, f"limit of {MAX_ITEMS} items reached")
+            items.append(validate_item(body.get("item")))
+        else:
+            index = body.get("index")
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(items):
+                raise ApiError(400, "entry no longer exists - reload the page")
+            if action == "edit":
+                items[index] = validate_item(body.get("item"))
+            else:
+                items.pop(index)
+        write_config(cfg)
+        return {"ok": True, "items": items}
+
+
+def run_system_item(body):
+    """Runs a command that is already stored in config.json (never one sent by the client)."""
+    index = body.get("index")
+    items = load_config().get("system_items") or []
+    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(items):
+        raise ApiError(400, "entry no longer exists - reload the page")
+    item = items[index]
+    if item.get("type") != "command" or not item.get("command"):
+        raise ApiError(400, "this entry is not a command")
+    now = time.time()
+    if now - _run_last.get(index, 0) < RUN_MIN_GAP:
+        raise ApiError(429, "slow down - try again in a moment")
+    _run_last[index] = now
+    try:
+        proc = subprocess.run(item["command"], shell=True, cwd=ROOT, capture_output=True,
+                              text=True, errors="replace", timeout=RUN_TIMEOUT, stdin=subprocess.DEVNULL)
+        out, code = (proc.stdout or "") + (proc.stderr or ""), proc.returncode
+    except subprocess.TimeoutExpired:
+        out, code = f"(timed out after {RUN_TIMEOUT}s)", None
+    return {"output": out[:MAX_OUTPUT], "code": code}
+
+
+# --------------------------------------------------------------------------
+# post-it wall (open to anyone who can reach the page, like the original Notey)
+# --------------------------------------------------------------------------
+POSTIT_FILE = ROOT / "data" / "postits.json"
+POSTIT_MAX, POSTIT_CHARS = 100, 500
+COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_postit_lock = threading.Lock()
+
+
+def load_postits():
+    try:
+        with open(POSTIT_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_postits(notes):
+    POSTIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = POSTIT_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(notes, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, POSTIT_FILE)
+
+
+def edit_postits(body):
+    action = body.get("action")
+    if action not in ("add", "update", "remove"):
+        raise ApiError(400, "unknown action")
+    content = body.get("content")
+    color = body.get("color")
+    if content is not None and (not isinstance(content, str) or len(content) > POSTIT_CHARS):
+        raise ApiError(400, f"note text must be at most {POSTIT_CHARS} characters")
+    if color is not None and (not isinstance(color, str) or not COLOR_RE.match(color)):
+        raise ApiError(400, "invalid color")
+    with _postit_lock:
+        notes = load_postits()
+        if action == "add":
+            if len(notes) >= POSTIT_MAX:
+                raise ApiError(400, f"limit of {POSTIT_MAX} notes reached")
+            notes.append({"id": uuid.uuid4().hex[:10], "content": content or "",
+                          "color": color or "#f7f1a8"})
+        else:
+            note = next((n for n in notes if n.get("id") == body.get("id")), None)
+            if note is None:
+                raise ApiError(404, "note no longer exists")
+            if action == "remove":
+                notes.remove(note)
+            else:
+                if content is not None:
+                    note["content"] = content
+                if color is not None:
+                    note["color"] = color
+        save_postits(notes)
+        return {"notes": notes}
 
 
 def set_password_cli():
@@ -504,6 +649,9 @@ class Handler(SimpleHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
         if path == "/api/system":
             return self._send_json(system_info())
+        if path == "/api/postits":
+            with _postit_lock:
+                return self._send_json({"notes": load_postits()})
         if path.startswith("/api/feeds/"):
             group = urllib.parse.unquote(path[len("/api/feeds/"):])
             try:
@@ -530,7 +678,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def do_POST(self):
-        if urllib.parse.urlsplit(self.path).path != "/api/pages":
+        path = urllib.parse.urlsplit(self.path).path
+        routes = {
+            "/api/pages": lambda body: edit_pages(body, self.client_address[0]),
+            "/api/system-items": lambda body: edit_system_items(body, self.client_address[0]),
+            "/api/system-items/run": run_system_item,
+            "/api/postits": edit_postits,
+        }
+        if path not in routes:
             return self._send_json({"error": "not found"}, 404)
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -545,11 +700,11 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ApiError(400, "invalid JSON")
             if not isinstance(body, dict):
                 raise ApiError(400, "invalid JSON")
-            self._send_json(edit_pages(body, self.client_address[0]))
+            self._send_json(routes[path](body))
         except ApiError as err:
             self._send_json({"error": err.message}, err.status)
         except (OSError, ValueError) as exc:
-            self._send_json({"error": f"could not update config.json: {exc}"}, 500)
+            self._send_json({"error": f"could not save: {exc}"}, 500)
 
     def do_HEAD(self):
         parsed = urllib.parse.urlsplit(self.path)
